@@ -1,0 +1,115 @@
+$CorrectConfig = @{"www.homebase.co.uk." = "www.homebase.co.uk.edgekey.net."; "www.argos.co.uk." = "www.argos.co.uk.edgekey.net."}
+$timestamp=(get-date).ToString("ddMMyy" + "T" + "HHmmss");
+$FilePath="C:\_SharingFolder\Reports\WebsiteChecks\DNSConfigChecks\"
+#$FilePath="c:\"
+
+function Get-PublicDnsRecord{
+    Param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [String]$DomainName,
+
+        [Parameter(Mandatory=$true,Position=1)]
+        [String]$DnsRecordType
+         )
+    
+    Begin{
+             $timestamp | out-file $FilePath"LastRun.txt"
+        }
+
+
+    Process{
+        ForEach($Record in $DomainName){
+            $WebUrl = "http://api.statdns.com/{0}/{1}" -f $Record, $DnsRecordType;
+            $WebData =  Invoke-WebRequest $WebUrl 
+            $WebData = $WebData | ConvertFrom-Json | select -ExpandProperty answer
+            $output = $WebData | % {
+                 New-Object -TypeName PSObject -Property  @{
+                    'Positive match'= $PositiveMatchResult = Get-doesItMatch -domainNames $_.name -returnedValue $_.rdata;
+                    'Returned result' = $_.rdata
+                    'Domain name' = $_.name  
+                }
+            }
+       
+            if ($PositiveMatchResult -ne "true")
+                    {
+                        TriggerAlarm -AlertMessage $output
+                    }
+        }
+    }
+    End{}
+}
+function Get-doesItMatch{
+  Param(
+   [Parameter(Mandatory=$True)]
+   [String]$domainNames,
+   
+   [Parameter(Mandatory=$True)]
+   [String]$returnedValue
+   )
+
+
+
+   Begin{
+   $correctValue = $CorrectConfig[$domainNames]
+   }
+   process {
+   if ($returnedValue -eq $correctValue) 
+    {
+        return "true"
+    }
+    else {return "FALSE-Action required!/Should be:" + $correctValue}
+   }
+   end{
+   }
+}
+
+
+function TriggerAlarm
+{
+#Description: Sends error message as an alert via Pushover and E-mail
+ 
+   Param(
+    [Parameter(Mandatory=$True)]
+    [String]$AlertMessage
+    )
+ 
+ Begin {
+
+   #Custom parameters - START:
+      $emailAlert_smtpServerConfig = "";
+      $emailAlert_FromAddress = "";
+      $emailAlert_ToAddress = "";
+      #$emailAlert_ToAddress = "";
+      $emailAlert_BodyText = "More information: " + $AlertMessage;
+      $pushOverAlert_APIPath = "https://api.pushover.net/1/messages.json";
+   #.END
+   }
+
+    Process{
+           #Pushover alert:
+              $parameters = @{
+                token = "" # Application API Token goes here
+                user = "" # Acount API Token goes here
+                priority = "2"
+                retry = "30"
+                expire = "86400"
+                title = "DNS Config-Check Alert !"
+                message = $AlertMessage
+              }
+              $parameters | Invoke-RestMethod -Uri $pushOverAlert_APIPath -Method Post
+            #.END
+
+            #E-mail alert:
+                Send-mailmessage -to $emailAlert_ToAddress -from $emailAlert_FromAddress -subject "DNS-Config check: ALERT !" -Body $emailAlert_BodyText -SmtpServer $emailAlert_smtpServerConfig;
+            #.END
+
+            #Write alert to file system:
+                $AlertMessage | out-file $FilePath"Alert!-"$timestamp".txt"
+            #.END
+    }
+    end{}
+}
+
+Get-PublicDnsRecord -DomainName "www.argos.co.uk." -DnsRecordType CNAME 
+Get-PublicDnsRecord -DomainName "www.homebase.co.uk." -DnsRecordType CNAME
+
